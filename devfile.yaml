@@ -1,0 +1,91 @@
+schemaVersion: 2.1.0
+metadata:
+  name: java-wildfly-numberguess
+  version: 2.0.0
+  website: https://wildfly.org
+  displayName: WildFly Java Numberguess
+  description: Upstream WildFly
+  icon: https://design.jboss.org/wildfly/logo/final/wildfly_logomark.svg
+  tags: ['Java', 'WildFly']
+  projectType: 'wildfly'
+  language: 'java'
+attributes:
+  .vscode/extensions.json: |
+    {
+      "recommendations": [
+        "redhat.java",
+        "vscode-java-debug"
+      ]
+    }
+  .che/che-theia-plugins.yaml: |
+    - id: redhat/java
+components:
+  - name: wildfly
+    container:
+      image: registry.access.redhat.com/ubi8/openjdk-11
+      memoryLimit: 1512Mi
+      mountSources: true
+      volumeMounts:
+        - name: m2-repository
+          path: /home/jboss/.m2/repository
+      env:
+        - name: GC_METASPACE_SIZE
+          value: '96'
+        - name: GC_MAX_METASPACE_SIZE
+          value: '256'
+        - name: JAVA_OPTS
+          value: '-Djava.security.egd=file:/dev/urandom'
+        - name: MVN_ARGS_APPEND
+          value: '-Popenshift -s /home/jboss/.m2/settings.xml -Dmaven.repo.local=/home/jboss/.m2/repository -Dcom.redhat.xpaas.repo.jbossorg'
+        - name: DEBUG_PORT
+          value: "5005"
+      endpoints:
+        - name: 'http'
+          targetPort: 8080
+  - name: m2-repository
+    volume:
+      size: 3Gi
+commands:
+  - id: initial-build
+    exec:
+      component: wildfly
+      commandLine: mvn ${MVN_ARGS_APPEND} clean package
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: build
+        isDefault: false
+  - id: run
+    exec:
+      component: wildfly
+      commandLine: mvn ${MVN_ARGS_APPEND} -Dwildfly.javaOpts="-Djboss.node.name=numberguess" org.wildfly.plugins:wildfly-maven-plugin:run
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: run
+        isDefault: true
+  - id: shutdown
+    exec:
+      component: wildfly
+      commandLine: mvn ${MVN_ARGS_APPEND} org.wildfly.plugins:wildfly-maven-plugin:shutdown
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: run
+        isDefault: false
+  - id: debug
+    exec:
+      component: wildfly
+      commandLine: mvn ${MVN_ARGS_APPEND} -Dwildfly.javaOpts="-Djboss.node.name=numberguess -agentlib:jdwp=transport=dt_socket,address=0.0.0.0:${DEBUG_PORT},server=y,suspend=n" org.wildfly.plugins:wildfly-maven-plugin:run
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: debug
+        isDefault: true
+  - id: build
+    exec:
+      component: wildfly
+      commandLine: mvn ${MVN_ARGS_APPEND} -Dmaven.test.skip=true org.wildfly.plugins:wildfly-maven-plugin:deploy
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: build
+        isDefault: true
+events:
+  postStart:
+    - 'initial-build'
