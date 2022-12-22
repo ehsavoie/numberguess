@@ -25,7 +25,7 @@ attributes:
 components:
   - name: wildfly
     container:
-      image: registry.access.redhat.com/ubi8/openjdk-11
+      image: quay.io/wildfly/wildfly-s2i:latest
       memoryLimit: 1512Mi
       mountSources: true
       volumeMounts:
@@ -37,7 +37,7 @@ components:
         - name: JAVA_OPTS
           value: '-Djava.security.egd=file:/dev/urandom'
         - name: MVN_ARGS_APPEND
-          value: '-Popenshift -s /home/jboss/.m2/settings.xml -Dmaven.repo.local=/home/jboss/.m2/repository -Dcom.redhat.xpaas.repo.jbossorg'
+          value: '-s /home/jboss/.m2/settings.xml -Dmaven.repo.local=/home/jboss/.m2/repository -Dcom.redhat.xpaas.repo.jbossorg'
         - name: DEBUG_PORT
           value: "5005"
       endpoints:
@@ -57,6 +57,18 @@ components:
           protocol: tcp
           targetPort: 4172
           exposure: internal
+  - name: tools
+    container:
+      image: quay.io/devfile/universal-developer-image:ubi8-latest
+      memoryLimit: 1512Mi
+      mountSources: true
+      env:
+        - name: OPENSHIFT_IMAGE_REGISTRY
+          value: "image-registry.openshift-image-registry.svc:5000"
+        - name: OPENSHIFT_NS
+          value: "ehugonne1-dev"
+        - name: IMAGE
+          value: "numberguess"
   - name: m2-repository
     volume:
       size: 3Gi
@@ -65,7 +77,7 @@ commands:
     exec:
       label: 1-Package and start the application.
       component: wildfly
-      commandLine: mvn ${MVN_ARGS_APPEND} -Dwildfly.javaOpts="-Djboss.node.name=numberguess" clean package org.wildfly.plugins:wildfly-maven-plugin:run
+      commandLine: mvn ${MVN_ARGS_APPEND} -Pprovisioned-server -Dwildfly.javaOpts="-Djboss.node.name=numberguess" clean package org.wildfly.plugins:wildfly-maven-plugin:run
       workingDir: ${PROJECT_SOURCE}
       group:
         kind: run
@@ -74,7 +86,7 @@ commands:
     exec:
       label: 2-Stop the application.
       component: wildfly
-      commandLine: mvn ${MVN_ARGS_APPEND} org.wildfly.plugins:wildfly-maven-plugin:shutdown
+      commandLine: mvn ${MVN_ARGS_APPEND} -Pprovisioned-server org.wildfly.plugins:wildfly-maven-plugin:shutdown
       workingDir: ${PROJECT_SOURCE}
       group:
         kind: run
@@ -83,7 +95,7 @@ commands:
     exec:
       label: 3-Package and start the application in debug mode.
       component: wildfly
-      commandLine: mvn ${MVN_ARGS_APPEND} -Dwildfly.javaOpts="-Djboss.node.name=numberguess -agentlib:jdwp=transport=dt_socket,address=0.0.0.0:${DEBUG_PORT},server=y,suspend=n" clean package org.wildfly.plugins:wildfly-maven-plugin:run
+      commandLine: mvn ${MVN_ARGS_APPEND} -Pprovisioned-server -Dwildfly.javaOpts="-Djboss.node.name=numberguess -agentlib:jdwp=transport=dt_socket,address=0.0.0.0:${DEBUG_PORT},server=y,suspend=n" clean package org.wildfly.plugins:wildfly-maven-plugin:run
       workingDir: ${PROJECT_SOURCE}
       group:
         kind: debug
@@ -92,8 +104,59 @@ commands:
     exec:
       label: 4-Update the application.
       component: wildfly
-      commandLine: mvn ${MVN_ARGS_APPEND} -Dmaven.test.skip=true org.wildfly.plugins:wildfly-maven-plugin:deploy
+      commandLine: mvn ${MVN_ARGS_APPEND} -Pprovisioned-server -Dmaven.test.skip=true org.wildfly.plugins:wildfly-maven-plugin:deploy
       workingDir: ${PROJECT_SOURCE}
       group:
         kind: build
         isDefault: true
+  - id: openshift-build
+    exec:
+      label: "1 Build the application for OpenShift."
+      component: wildfly
+      commandLine: mvn ${MVN_ARGS_APPEND} -Popenshift -Dmaven.test.skip=true clean package
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: build
+        isDefault: true
+  - id: openshift-registry-login
+    exec:
+      label: "2 Login into OpenShift registry."
+      component: tools
+      commandLine: podman login --tls-verify=false -u kubeadmin -p $(oc whoami -t) ${OPENSHIFT_IMAGE_REGISTRY}
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: build
+        isDefault: true
+  - id: build-runtime-image
+    exec:
+      label: "3 Build Runtime Image for Openshift."
+      component: tools
+      commandLine: podman build -f Dockerfile -t ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE} .
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: build
+        isDefault: true
+  - id: push-image
+    exec:
+      label: "4 Push Image into OpenShift registry."
+      component: tools
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: podman tag ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE} ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE}:latest && podman push --tls-verify=false ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE}:latest
+      group:
+        kind: build
+  - id: deploy-image
+    exec:
+      label: "5 Deploy Image into OpenShift."
+      component: tools
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: "helm repo add wildfly https://docs.wildfly.org/wildfly-charts/ && oc set image-lookup ${IMAGE} && helm install ${IMAGE} -f charts/helm.yaml --set build.enabled=false --set image.name=${IMAGE} wildfly/wildfly"
+      group:
+        kind: run
+  - id: undeploy-image
+    exec:
+      label: "6 Undeploy Image into OpenShift."
+      component: tools
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: "helm uninstall ${IMAGE}"
+      group:
+        kind: run
