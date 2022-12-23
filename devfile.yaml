@@ -65,8 +65,6 @@ components:
       env:
         - name: OPENSHIFT_IMAGE_REGISTRY
           value: "image-registry.openshift-image-registry.svc:5000"
-        - name: OPENSHIFT_NS
-          value: "ehugonne1-dev"
         - name: IMAGE
           value: "numberguess"
   - name: m2-repository
@@ -122,7 +120,7 @@ commands:
     exec:
       label: "2 Login into OpenShift registry."
       component: tools
-      commandLine: podman login --tls-verify=false -u kubeadmin -p $(oc whoami -t) ${OPENSHIFT_IMAGE_REGISTRY}
+      commandLine: podman login --tls-verify=false -u kubeadmin -p $(oc whoami -t) ${OPENSHIFT_IMAGE_REGISTRY} && oc login --token=$(oc whoami -t)
       workingDir: ${PROJECT_SOURCE}
       group:
         kind: build
@@ -131,7 +129,7 @@ commands:
     exec:
       label: "3 Build Runtime Image for Openshift."
       component: tools
-      commandLine: podman build -f Dockerfile -t ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE} .
+      commandLine: "export OPENSHIFT_NS=$(oc project -q) && podman build -f Containerfile -t ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE} ."
       workingDir: ${PROJECT_SOURCE}
       group:
         kind: build
@@ -141,7 +139,7 @@ commands:
       label: "4 Push Image into OpenShift registry."
       component: tools
       workingDir: ${PROJECT_SOURCE}
-      commandLine: podman tag ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE} ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE}:latest && podman push --tls-verify=false ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE}:latest
+      commandLine: "export OPENSHIFT_NS=$(oc project -q) && podman tag ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE} ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE}:latest && podman push --tls-verify=false ${OPENSHIFT_IMAGE_REGISTRY}/${OPENSHIFT_NS}/${IMAGE}:latest"
       group:
         kind: build
   - id: deploy-image
